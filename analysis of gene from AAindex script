@@ -1,0 +1,77 @@
+import pandas as pd
+import re
+
+def parse_aaindex_from_docx(doc_path):
+    """
+    Parse AAindex data from the provided DOCX file.
+    """
+    from docx import Document
+
+    doc = Document(doc_path)
+    aaindex_dict = {}
+    aa_order = ["A", "L", "R", "K", "N", "M", "D", "F", "C", "P", "Q", "S", "E", "T", "G", "W", "H", "Y", "I", "V"]
+
+    current_index = None
+    values = []
+    for para in doc.paragraphs:
+        text = para.text.strip()
+
+        if text.startswith("H ") and len(text.split()) > 1:
+            if current_index and values:
+                aaindex_dict[current_index] = dict(zip(aa_order, values))
+            current_index = text.split()[1]
+            values = []
+
+        elif text.startswith("I"):
+            continue
+
+        elif re.match(r"^[\d\s\.-]+$", text):
+            nums = [float(x) for x in text.split() if re.match(r"-?\d+\.?\d*", x)]
+            values.extend(nums)
+
+        elif text.startswith("//"):
+            if current_index and values:
+                aaindex_dict[current_index] = dict(zip(aa_order, values))
+            current_index = None
+            values = []
+
+    return aaindex_dict
+
+
+def extract_mutation_parts(mutation):
+    match = re.match(r"([A-Z])\d+([A-Z])", str(mutation))
+    if match:
+        return match.group(1), match.group(2)
+    return None, None
+
+
+def annotate_mutations(mutation_file, aaindex_file, output_file):
+    df = pd.read_csv(mutation_file)
+
+    print("Reading AAindex...")
+    aaindex_dict = parse_aaindex_from_docx(aaindex_file)
+    print(f"Parsed {len(aaindex_dict)} AAindex entries")
+
+    if "Protein Change" not in df.columns:
+        raise ValueError("Input mutation file must have a 'Protein Change' column")
+
+    for idx, aa_values in aaindex_dict.items():
+        deltas = []
+        for mut in df["Protein Change"]:
+            wt, mt = extract_mutation_parts(mut)
+            if wt and mt and wt in aa_values and mt in aa_values:
+                deltas.append(aa_values[mt] - aa_values[wt])
+            else:
+                deltas.append(None)
+        df[idx] = deltas
+
+    df.to_excel(output_file, index=False)
+    print(f"✅ Saved annotated dataset to {output_file}")
+
+
+if __name__ == "__main__":
+    mutation_file = "chol_msk_2018_mutations_clean.csv"
+    aaindex_file = "AA index script.docx"
+    output_file = "AAindex_annotated.xlsx"
+
+    annotate_mutations(mutation_file, aaindex_file, output_file)
